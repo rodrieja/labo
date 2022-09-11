@@ -1,4 +1,4 @@
-#Este script demora varias horas en correr
+ #Este script demora varias horas en correr
 #se sugiere solo entender el codigo e interpretar los resultados que genera
 #los resultados quedan en el repositorio GitHub  /exp/ST1005
 

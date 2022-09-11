@@ -5,7 +5,7 @@ gc()             #garbage collection
 require("data.table")
 require("rpart")
 
-setwd("." )  #establezco la carpeta donde voy a trabajar
+setwd("/Users/alejandrrodr/Documents/DMUBA/DM-EyF")  #establezco la carpeta donde voy a trabajar
 #cargo el dataset
 dataset  <- fread( "./datasets/competencia1_2022.csv")
 
@@ -23,7 +23,7 @@ for( vmaxdepth  in 4:25 )
                    data= dataset_entrenar,
                    model= TRUE, #quiero que me devuelva el modelo
                    xval= 0,
-                   cp= 0,
+                   cp= -1,
                    minsplit= 5,
                    maxdepth=  vmaxdepth
                   )
@@ -45,8 +45,11 @@ for( vmaxdepth  in 4:25 )
   entrega <-  as.data.table( list(  "numero_de_cliente"= dataset_aplicar$numero_de_cliente,
                                     "Predicted"=  estimulo ) )
 
+  # dir.create("./exp/")
+  # dir.create("./exp/canaritos")
+  
   #genero el archivo para Kaggle
   fwrite( entrega,
-          file= paste0("./kaggle/altura_", vmaxdepth, ".csv"))
+          file= paste0("./exp/canaritos/altura_2-", vmaxdepth, ".csv"))
 }
 

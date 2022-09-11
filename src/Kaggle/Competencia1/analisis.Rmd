@@ -1,0 +1,881 @@
+---
+title: "TP2_RodriguezAlejandro"
+author: "Rodriguez Alejandro Edgar"
+date: '2022-07-11'
+output:
+  html_document:
+    toc: yes
+    toc_float: yes
+    df_print: paged
+  html_notebook:
+    theme: spacelab
+    toc: yes
+    toc_float: yes
+    df_print: paged
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+knitr::opts_chunk$set(message = FALSE)
+knitr::opts_chunk$set(warning = FALSE)
+library("readxl")
+library("dplyr")
+library("tidyverse")
+library("moments")
+library("arules")
+library("plotrix")
+library("RVAideMemoire") # Paquete que contiene funciones misceláneas útiles en bioestadística
+library("car")
+library("pgirmess")
+library("gsheet")
+library("ggrepel")
+library("GGally")
+library("corrplot")
+library("factoextra")
+library("ggpubr")
+library("ggfortify")
+library("rsample")
+library("mvShapiroTest")
+library("heplots")
+library("MASS")
+library("klaR")
+library("DescTools")
+library("npmv")
+library("mlr")
+library("knitr")
+library("ggplot2")
+library("dendextend")
+require("data.table")
+
+```
+
+```{r theme general}
+theme <- theme(text = element_text(size=10),
+               plot.title = element_text(size = 12, face = "bold.italic", hjust = 0.5), 
+               axis.title.x = element_text(size = 10, face="bold", colour='black'),         
+               axis.title.y = element_text(size = 10, face="bold"),
+               panel.border = element_blank(),
+               panel.grid.major = element_blank(),
+               panel.grid.minor = element_blank(), 
+               legend.title = element_text(face="bold"))
+```
+#### 
+# Trabajo Práctico N° 2
+
+## 0- Preparación del ambiente de trabajo
+
+El trabajo práctico comenzó con la generación de una muestra aleatoria estratificada y balanceada por variedad de vino de tamaño n = 2000, utilizando como semilla los últimos tres dígitos de mi DNI (907).
+Para realizar el estratificado, se utilizo el comando group_by por variedad y luego con sample_n se seleccionaron 1000 datos de cada variedad, por lo que al tener 2 variedades (blanco y tinto), se obtuvo un total de 2000 datos.
+
+### Importación de los datos
+```{r data, warning=FALSE, message=F, warn.conflicts=FALSE}
+setwd("/Users/alejandrrodr/Documents/DMUBA/DM-EyF")  #establezco la carpeta donde voy a trabajar
+#cargo el dataset
+dataset  <- fread( "./datasets/competencia1_2022.csv")
+```
+
+```{r}
+gpairs_lower <- function(g){
+  g$plots <- g$plots[-(1:g$nrow)]
+  g$yAxisLabels <- g$yAxisLabels[-1]
+  g$nrow <- g$nrow -1
+
+  g$plots <- g$plots[-(seq(g$ncol, length(g$plots), by = g$ncol))]
+  g$xAxisLabels <- g$xAxisLabels[-g$ncol]
+  g$ncol <- g$ncol - 1
+
+  g
+}
+
+g <- ggpairs(dataset, 
+            aes(color = dataset$clase_ternaria, alpha = 0.5),
+            lower = list(continuous = "points", combo = "dot"), 
+            upper  = list(continuous = "blank"), legend = 1)+ theme(legend.position = "bottom")
+
+# Trato de ver como se relacionan las variables
+gpairs_lower(g)
+```
+
+### Matriz de correlación
+Viendo la matriz de correlación se detectan algunas relaciones fuertes entre anhidrido_sulfuroso_libre y anhidrido_sulfuroso_total, densidad y acidez_fija, una relación inversa entre alcohol y densidad y en menor medida en el resto, pero no se observa que alguna de las variables resulte ser una combinación de otras y repetir valores.
+
+```{r} 
+#Matriz de correlación
+m_cor <- cor(dataset) 
+
+# representa la matriz de correlaciones mediante círculos
+corrplot(m_cor,method="circle") 
+```
+
+Obtengo las componentes principales del DF, estandarizando las variables para evitar conflictos con diferentes unidades o medidas.
+
+```{r} 
+pca <- prcomp(numeric_df, scale = TRUE)
+names(pca)
+pca
+```
+
+Con los loadings de PCA (rotation) veamos cómo están relacionadas las variables y las nuevas componentes.
+
+```{r}
+contrib <- as.matrix(round(pca$rotation,2))
+corrplot(contrib,is.corr=FALSE)
+```
+
+Obtenemos los autovalores y con ellos la proporción de la variabilidad total acumulada, que nos sirva para tomar una decisión sobre la cantidad de componentes a utilizar. Eso lo decidiremos a continuación.
+
+```{r}
+prop_varianza <- pca$sdev^2 / sum(pca$sdev^2)
+prop_varianza_acum <- cumsum(prop_varianza)
+round(prop_varianza_acum*100,2)
+```
+
+### Selección de componentes
+#### Criterio 1: Porcentaje de variabilidad explicada
+Se define un porcentaje de variabilidad mínimo que se desea explicar y se toman las primeras m componentes que alcanzan este porcentaje de explicación.
+
+#### Criterio 2: Criterio de Kaiser
+Consiste en retener las m primeras componentes tales que sus autovalores resulten iguales o mayores que 1.
+
+#### Criterio 3: Criterio del bastón roto
+Si la proporción de variabilidad explicada por $Y1, Y2, · · ·, Ym$ se estabiliza a partir de un cierto valor de CP, entonces aumentar la dimensión no aportaría cambios significativos.
+
+```{r}
+criterio1_plot = ggplot(data = data.frame(prop_varianza_acum, pc = 1:12),
+       aes(x = pc, y = prop_varianza_acum, group = 1)) +
+  geom_point() +
+  geom_line() +
+  theme_bw() +
+  labs(x = "Componente principal",
+       y = "Varianza explicada acumulada",
+       title = "Criterio 1")
+
+var_explained_df <- data.frame(PC=sprintf("%02d", c(1:12)),
+                               var_explained=pca$sdev^2)
+
+criterio2_plot = var_explained_df %>%
+  ggplot(aes(x=PC,y=var_explained, group=1))+
+  geom_point(size=2)+
+  geom_hline(yintercept=1, linetype="dashed", color = "red")+
+  geom_line()+
+  labs(x = "Componente principal",
+       y = "Varianza explicada",
+       title = "Criterio 2")
+
+criterio3_plot = fviz_eig(pca, ncp =12, addlabels = TRUE, main="Criterio 3")
+
+combined_plot <- ggarrange(criterio1_plot,
+                           criterio2_plot,
+                           criterio3_plot,
+                           nrow = 2,
+                           ncol = 2)
+
+combined_plot
+```
+
+Con los valores y los gráficos obtenidos, vemos que con los 3 criterios podemos tomar la desición de utilizar hasta la cuarta componente, donde tenemos un 73% de varianza explicada acumulada, las varianzas son mayor a 1 y en el gráfico de sedimentación vemos que la pendiente ya no es significativa y cada vez es mejor la acumulación de varianza explicada.
+
+### Conclusiones
+
+Se realizó el biplot sobre las 4 primeras componentes, observando que en el primer caso, al colorear por variedad de vino, se percibe una clara separación entre las variedades, donde podemos apreciar cuales son las variables que más representan al vino tinto y cuales al vino blanco. Por ejemplo, el vino tinto tiene como característica principal la acidez_volatil, en cambio el vino blanco está más representado por los anhídrido.sulfuroso libre y total, quienes tienen una gran correlación entre ellos y vemos que el alcohol parece ser independiente a estas características, ya que su vector tiende a un ángulo de 90ª en relación a estas variables.
+
+```{r}
+autoplot(pca, 
+         data = stratified_df, 
+         colour = 'variedad',
+         loadings = TRUE, 
+         loadings.colour = 'black',
+         loadings.label = TRUE, 
+         loadings.label.size = 4,
+         loadings.label.color = 'black')
+```
+
+Viendo el resultado del biplot de las componentes 3 y 4, ya no se observa una clara diferencia entre las variedades, lo cuál tiene sentido, siendo que la varianza que explican es mucho menor a las PC1 y PC2. Lo que se observa en estas dimensiones es una gran correlación con el pH. También se observa una concentración de los scores alrededor de los loadinds de Anhídrido sulfuroso, azúcares, acidez, que son las variables que le dan las carácteristicas a los vinos, por lo que podemos pensar que en estas componentes pueden estar representando la calidad de los vinos.
+
+```{r}
+autoplot(pca, 
+         x = 3,
+         y = 4,
+         data = stratified_df, 
+         colour = 'variedad',
+         loadings = TRUE, 
+         loadings.colour = 'black',
+         loadings.label = TRUE, 
+         loadings.label.size = 4,
+         loadings.label.color = 'black')
+```
+
+## 2- Análisis Discriminante
+Realice el Análisis Discriminante para clasificar los vinos según la variable variedad de vino. Interprete los resultados.
+
+### Preparación del espacio de trabajo
+Lo primero que haremos es preparar el espacio de trabajo para poder definir las hipótesis y evaluar los resultados.
+
+#### Definición del dataset de training y test
+```{r}
+set.seed(907)
+
+df_split <- initial_split(stratified_df,
+                          prop = 0.9, # defino un proporción de 90% para training y 10% para test
+                          strata = variedad)
+
+df_train <- df_split %>%
+              training()
+
+df_test <- df_split %>%
+              testing()
+
+# Número de datos en test y train
+paste0("Total del dataset de entrenamiento: ", nrow(df_train))
+paste0("Total del dataset de testeo: ", nrow(df_test))
+```
+
+Creamos dos subsets de datos, uno para cada variedad, que es nuestra variable target.
+
+```{r}
+variedad_tinto <- subset(df_train, df_train$variedad == 1)
+variedad_tinto = variedad_tinto[, ! names(variedad_tinto) %in% c("variedad"), drop = F]
+
+variedad_blanco <- subset(df_train, df_train$variedad == 2)
+variedad_blanco = variedad_blanco[, ! names(variedad_blanco) %in% c("variedad"), drop = F]
+```
+
+### Análisis de supuestos
+Este tipo de análisis es válido solo si se satisfacen los siguientes supuestos:
+
+1. Normalidad multivariada
+2. Independencia de las observaciones
+3. Homocedasticidad.
+
+#### Normalidad multivariada
+
+Utilizamos el test de Shapiro (multivariado) para evaluar el supuesto de normalidad. 
+
+Observando los resultados, vemos que no se cumple el supuesto en ninguno de las variedades.
+
+```{r}
+mvShapiro.Test(as.matrix(variedad_tinto))
+mvShapiro.Test(as.matrix(variedad_blanco))  
+```
+
+#### Independencia de las observaciones
+
+Asumimos que viene dado por el diseño del dataset. 
+
+3. Homocedasticidad.
+
+Realizamos el test de Box sobre el dataset de entrenamiento, indicando el subconjunto de variables y la variable target como parámetros de la función del estadístico.
+
+Observando el resultado, vemos que no se cumple el supuesto.
+
+```{r}
+boxM(cbind(acidez_fija, acidez_volatil, acido_citrico, azucar_residual, cloruros, anhidrido_sulfuroso_libre, anhidrido_sulfuroso_total, densidad, pH, sulfatos, alcohol, calidad) ~ variedad, data=df_train)
+```
+
+Como boxM es sensible a la falta de normalidad, aplico Levene utilizando betadisper del paquete "vegan" (equivalente a levene, pero multivariado)
+
+```{r}
+matriz_de_distancias <- vegan::betadisper(dist(df_train[,1:12], method='euclidean'), df_train$variedad, type = c("median","centroid"), bias.adjust = T,sqrt.dist = FALSE, add = FALSE)
+test_levene <- anova(matriz_de_distancias)
+p.valor <- test_levene$`Pr(>F)`[1]
+TukeyHSD(matriz_de_distancias)
+paste0("Levene: p-value: ", p.valor)
+```
+
+Con estos resultados no podemos avanzar con el LDA, o por lo menos, no podemos confiar en que el resultado que arroje sea válido. 
+
+Al no cumplirse el supuesto de homocedasticidad podríamos intentar recurrir al análisis discriminante cuadrático (QDA), pero en este caso tampoco se cumple el supuesto de normalidad multivariado, por lo que en ninguno de los casos podemos asegurar que los resultados sean válidos. Sin embargo, nos interesa ver cómo clasifican estos métodos, por lo que realizaremos el análisos lineal y cuadrático y compararemos los resultados.
+
+### Análisis de diferencias de medias
+
+Además de los supuestos para aplicar el estadístico, veremos si tiene sentido realizar una clasificación al evaluar si las medias de cada categoría son diferentes, por lo que utilizaremos el test de medias multivariado para saber si la H0 de que las medias de cada grupo son iguales.
+
+#### Hotelling
+
+```{r}
+# Analizo cómo me da Hotelling para ver diferencias en el vector de medias de cada grupo
+HOTELLING <- HotellingsT2Test(as.matrix(df_train[,1:12]) ~ variedad, data = df_train)
+HOTELLING
+```
+
+Al realizar el test vemos que se rechaza H0, pero al no cumplir con el supuesto de normalidad este valor podría verse afectado, por lo que realizaremos un test no parámetrico para comprobar si se obtiene el mismo resultado y se rechaza H0.
+
+#### Test no paramétrico
+```{r}
+# se utiliza el paquete npmv no paramétrico para comparar vector de medias. (Nonparametric Inference for Multivariate Data: R Package npmv, January 2017, Volume 76, Issue 4. doi: 10.18637/jss.v076.i04, https://www.jstatsoft.org/article/view/v076i04)
+
+noparam <- nonpartest(cbind(acidez_fija, acidez_volatil, acido_citrico, azucar_residual, cloruros, anhidrido_sulfuroso_libre, anhidrido_sulfuroso_total, densidad, pH, sulfatos, alcohol, calidad) ~ variedad, data = df_train, permreps = 1000, plots=F)
+noparam$results
+```
+
+Con los resultados del test no paramétrico podemos rechazar con confianza la H0 de que las medias de los grupos son iguales y entonces tiene sentido realizar la clasificación con los diferentes métodos, ya que tenemos 2 grupos diferentes que pueden ser clasificables.
+
+### Discriminante Lineal (LDA)
+
+```{r}
+model_lda <- lda(variedad ~ ., data = df_train)
+model_lda
+```
+
+#### Distribución de las predicciones
+
+Al tener una única dimensión, LD1, generamos un histograma para observa la distribución de las predicciones y si existe solapamiente y en qué medida. Esto lo confirmaremos luego con la matriz de confusión.
+
+```{r}
+p <- predict(model_lda, df_train)
+ldahist(data = p$x[,1], g = df_train$variedad)
+```
+
+#### Matriz de confusión
+
+Vemos que los resultados obtenidos en training son buenos debido a que tenemos un accuracy del 99%
+
+```{r}
+p1 <- predict(model_lda, df_train)$class
+confusion_train = table(Predicted = p1, Actual = df_train$variedad)
+confusion_train
+
+# Accuracy
+sum(diag(confusion_train))/sum(confusion_train)
+```
+
+Veamos los resultados con el subset de test. Vemos que las predicciones fueron excelente.
+
+```{r}
+p2 <- predict(model_lda, df_test)$class
+confusion_test = table(Predicted = p2, Actual = df_test$variedad)
+confusion_test
+
+# Accuracy
+sum(diag(confusion_test))/sum(confusion_test)
+```
+
+#### Conclusión
+
+Aunque no se hayan cumplidos los supuestos de normalidad multivariada y homocedasticidad, vemos que el LDA clasificó con un 99% de accuracy el dataset de entrenamiento. Si bien no podemos confiar en que el LDA sea confiable al no cumplir con los supuestos, en la práctiva vemos que los resultados empíricos brindan un grado aceptable de confianza. Sería necesario realizar más pruebas con otro dataset para corroborarlo, pero es un modelo que se puede utilizar.
+
+### Discriminante Cuadrático (QDA)
+
+Ahora realizaremos el análisis discriminante cuadrático para comparar los resultados. Siempre teniendo en cuanta que no se cumplen los supuestos necesarios, en este caso el de normalidad multivariada.
+
+
+```{r}
+model_qda <- qda(variedad ~ ., df_train)
+model_qda
+```
+
+Dataset de entrenamiento
+
+```{r}
+p3 <- predict(model_qda, df_train)$class
+confusion_q_train = table(Predicted = p3, Actual = df_train$variedad)
+confusion_q_train
+
+# Accuracy
+sum(diag(confusion_q_train))/sum(confusion_q_train)
+```
+
+Dataset de prueba
+
+```{r}
+p4 <- predict(model_qda, df_test)$class
+confusion_q_test = table(Predicted = p4, Actual = df_test$variedad)
+confusion_q_test
+
+# Accuracy
+sum(diag(confusion_q_test))/sum(confusion_q_test)
+```
+
+#### Conclusión
+
+Comparando los resultados con los obtenidos con LDA, vemos que el accuracy de QDA es menor, lo cual puede ser por la presencia de outliers, donde QDA es más sensible o puede ser que la falta de normalidad esté afectando en mayor medida a QDA que a LDA. Sin embargo, pese a que tiene un accuracy menor, el resultado obtenido no deja de ser bueno, ya que en el dataset de entrenamiento clasificó de forma correcta al 98% de los casos y al igual que con LDA, si bien al no cumplir los supuestos, no se puede confiar en los resultados, en la práctiva vemos que el método de clasificación funciona y muy bien.
+
+## 3- Algoritmo SVM
+Aplique el algoritmo SVM al conjunto de datos. Interprete los resultados.
+
+Realizaremos el análisis sobre los 3 posibles clasificadores vistos en la cursada.
+- Kernel lineal
+- Kernel sigmoideo
+- Kernel radial
+
+### Kernel lineal
+
+```{r}
+# Defino modelo SVM
+set.seed(907)
+task = makeClassifTask(data = df_train, target = "variedad") 
+lrn_svm_1 = makeLearner("classif.svm", predict.type = "prob", par.vals = list( kernel = "linear", cost=2)) 
+mod_svm_1 = mlr::train(lrn_svm_1, task)
+
+# Predicción TEST
+pred_svm_1 <- predict(mod_svm_1, newdata = df_test)
+acc_svm_1 <- round(measureACC(as.data.frame(pred_svm_1)$truth, as.data.frame(pred_svm_1)$response), 3)
+AUC_svm_1 <- round(measureAUC(as.data.frame(pred_svm_1)$prob.1,as.data.frame(pred_svm_1)$truth,'2','1'),3)
+
+# Predicción TRAIN (naive)
+pred_svm_1_tr = predict(mod_svm_1, newdata = df_train)
+acc_svm_1_tr <- round(measureACC(as.data.frame(pred_svm_1_tr)$truth, as.data.frame(pred_svm_1_tr)$response),3)
+AUC_svm1_tr <- round(measureAUC(as.data.frame(pred_svm_1_tr)$prob.1,as.data.frame(pred_svm_1_tr)$truth, '2','1'),3)
+
+# ················ Métricas del modelo de SVM ················
+Métrica <- c('valor','datos')
+Accuracy <- c(acc_svm_1,'prueba')
+Accuracy_tr <- c(acc_svm_1_tr,'entrenamiento')
+AUC_ROC <- c(AUC_svm_1,'prueba')
+AUC_ROC_tr <- c(AUC_svm1_tr,'entrenamiento')
+
+# Imprimo resultados
+kable(rbind(Métrica, Accuracy, Accuracy_tr, AUC_ROC, AUC_ROC_tr))
+```
+
+```{r}
+# Gráfico de los resultados
+df_svm = generateThreshVsPerfData(list(svm_te = pred_svm_1, svm_tr = pred_svm_1_tr), 
+                                  measures = list(fpr, tpr, mmce))
+
+plotROCCurves(df_svm) + theme +
+        labs(title='Curva ROC del modelo de Máquinas de soporte vectorial SVM kernel lineal', 
+             x='Tasa de falsos positivos (FPR)', y='Tasa de positivos verdaderos (TPR)',
+             color='Conjunto de\n evaluación') +
+        scale_color_manual(values = c("red", "darkred"), labels=c('prueba','entrenamiento')) +
+        geom_label(label="AUC= 1", x=0.35, y=0.75, label.size = 0.3, size=4,
+                   color = "red",fill="white") + 
+        geom_label(label="AUC= 0.998", x=0.07, y=0.97, label.size = 0.3, size=4,
+                   color = "darkred",fill="white")
+```
+
+### Kernel sigmoideo
+
+```{r SVM2}
+# Defino modelo SVM
+set.seed(907)
+
+task_2 = makeClassifTask(data = df_train, target = "variedad") 
+lrn_svm_2 = makeLearner("classif.svm", predict.type = "prob", par.vals = list( kernel = "sigmoid", cost=2)) 
+mod_svm_2 = mlr::train(lrn_svm_2, task)
+# Predicción TEST
+pred_svm_2= predict(mod_svm_2, newdata = df_test)
+acc_svm_2 <- round(measureACC(as.data.frame(pred_svm_2)$truth, as.data.frame(pred_svm_2)$response),3)
+AUC_svm_2 <- round(measureAUC(as.data.frame(pred_svm_2)$prob.1, as.data.frame(pred_svm_2)$truth,'2','1'),3)
+
+# Predicción TRAIN (naive)
+pred_svm_2_tr = predict(mod_svm_2, newdata = df_train) 
+acc_svm_2_tr <- round(measureACC(as.data.frame(pred_svm_2_tr)$truth, as.data.frame(pred_svm_2)$response),3)
+AUC_svm_2_tr <- round(measureAUC(as.data.frame(pred_svm_2_tr)$prob.1, as.data.frame(pred_svm_2_tr)$truth,'2','1'),3)
+
+# ················ Métricas del modelo de SVM ················
+Métrica <- c('valor','datos')
+Accuracy_2 <- c(acc_svm_2, 'prueba')
+Accuracy_2_tr <- c(acc_svm_2_tr, 'entrenamiento')
+AUC_ROC_2 <- c(AUC_svm_2, 'prueba')
+AUC_ROC_2_tr <- c(AUC_svm_2_tr, 'entrenamiento')
+
+# Imprimo resultados de métricas de performance
+kable(rbind(Métrica, Accuracy_2, Accuracy_2_tr, AUC_ROC_2, AUC_ROC_2_tr))
+```
+
+```{r}
+# Gráfico de los resultados
+df_svm_2 = generateThreshVsPerfData(list(svm_te = pred_svm_2, svm_tr = pred_svm_2_tr), 
+                                  measures = list(fpr, tpr, mmce))
+
+plotROCCurves(df_svm_2) + theme +
+        labs(title='Curva ROC del modelo de Máquinas de soporte vectorial SVM kernel sigmoideo', 
+             x='Tasa de falsos positivos (FPR)', y='Tasa de positivos verdaderos (TPR)',
+             color='Conjunto de\n evaluación') +
+        scale_color_manual(values = c("red", "darkred"), labels=c('prueba','entrenamiento')) +
+        geom_label(label="AUC= 0.995", x=0.35, y=0.75, label.size = 0.3, size=4,
+                   color = "red",fill="white") + 
+        geom_label(label="AUC= 0.988", x=0.07, y=0.97, label.size = 0.3, size=4,
+                   color = "darkred",fill="white")
+```
+
+### Kernel radial
+```{r}
+set.seed(907)
+
+task = makeClassifTask(data = df_train, target = "variedad") 
+lrn_svm_3 = makeLearner("classif.svm", predict.type = "prob", par.vals = list( kernel = "radial", cost=2)) 
+mod_svm_3 = mlr::train(lrn_svm_3, task)
+
+# Predicción TEST
+pred_svm_3 = predict(mod_svm_3, newdata = df_test)
+acc_svm_3 <- round(measureACC(as.data.frame(pred_svm_3)$truth, as.data.frame(pred_svm_3)$response),3)
+AUC_svm_3 <- round(measureAUC(as.data.frame(pred_svm_3)$prob.1, as.data.frame(pred_svm_3)$truth, '2', '1'), 3)
+
+# Predicción TRAIN (naive)
+pred_svm_3_tr = predict(mod_svm_3, newdata = df_train) # por si quiero ver naive sobre training
+acc_svm_3_tr <- round(measureACC(as.data.frame(pred_svm_3_tr)$truth, as.data.frame(pred_svm_3_tr)$response),3)
+AUC_svm_3_tr <- round(measureAUC(as.data.frame(pred_svm_3_tr)$prob.1, as.data.frame(pred_svm_3_tr)$truth, '2', '1'), 3)
+
+# ················ Métricas del modelo de SVM ················
+Métrica <- c('valor','datos')
+Accuracy_3 <- c(acc_svm_3, 'prueba')
+Accuracy_3_tr <- c(acc_svm_3_tr, 'entrenamiento')
+AUC_ROC_3 <- c(AUC_svm_3, 'prueba')
+AUC_ROC_3_tr <- c(AUC_svm_3_tr, 'entrenamiento')
+
+# Imprimo resultados de métricas de performance
+kable(rbind(Métrica, Accuracy_3, Accuracy_3_tr, AUC_ROC_3, AUC_ROC_3_tr))
+```
+
+```{r}
+df_svm_3 = generateThreshVsPerfData(list(svm_te = pred_svm_3, svm_tr = pred_svm_3_tr), 
+                                  measures = list(fpr, tpr, mmce))
+
+plotROCCurves(df_svm_3) + theme +
+        labs(title='Curva ROC del modelo de Máquinas de soporte vectorial SVM kernel radial', 
+             x='Tasa de falsos positivos (FPR)', y='Tasa de positivos verdaderos (TPR)',
+             color='Conjunto de\n evaluación') +
+        scale_color_manual(values = c("red", "darkred"), labels=c('prueba','entrenamiento')) +
+        geom_label(label="AUC= 1", x=0.35, y=0.75, label.size = 0.3, size=4,
+                   color = "red",fill="white") + 
+        geom_label(label="AUC= 0.999", x=0.07, y=0.97, label.size = 0.3, size=4,
+                   color = "darkred",fill="white")
+```
+
+Nota: Intenté mostrar los resultados en el gráfico de componentes principales, junto con la clasificación que habían obtenido, pero obtengo un error de compatibilidad con ggbiplot y data de tipo prcomp.
+
+#### Conclusiones
+
+En base al experimento planteado, se observa que en este caso, el kernel lineal y radial se comportan de la misma forma con un accuracy del 100% y el sigmoideo presenta un rendimiento menor, aunque muy bueno, de 97.5%.
+
+SVM se comporta con una performance superior a método de análisis discriminante, teniendo una tasa de aciertos casi perfecta. Esto me plantea la duda de si los resultados están overfitteados de alguna forma o si los outliers que supongo afectaron al LDA/QDA en SVM están provocando que esos casos que antes molestaban ahora estén generando que los modelos se adaopten a esos casos y en otro dataset tengan un rendimiento inferior o haya que reentrenarlo. Sin embargo, aun disminuyendo algunos puntos, tener una tasa mayor a 90% es excelente.
+
+##### Resultado final de los 3 modelos:
+```{r}
+ACC_values <- rbind(acc_svm_1, acc_svm_2, acc_svm_3)
+AUC_values <- rbind(AUC_svm_1, AUC_svm_2, AUC_svm_3)
+svm_result_df <- as.data.frame(AUC_values)
+svm_result_df$ACC <- ACC_values
+svm_result_df$Modelo <- c('Lineal', 'Sigmoideo', 'Radial')
+colnames(svm_result_df) <- c('Area debajo de la curva (AUC)', 'Accuracy', 'Modelo')
+row.names(svm_result_df) <- NULL
+result <- svm_result_df%>%dplyr::select(3,1,2)
+
+kable(result)
+```
+
+## 4- Clasificación jerárquica
+Elija un método de Clasificación jerárquico y aplíquelo a los datos. Interprete los
+resultados.
+
+Lo primero que haremos será reducir la cantidad de individuos en nuestra muestra, ya que este método es muy costoso computacionalmente y los resultados pierden sentido cuando se grafican muchos individuos. Se tomó una muestra del 10% por lo que de 2000 registros pasamos a 200.
+
+```{r}
+set.seed(907)
+
+hierarchical_df = df_DatosTP1 %>%
+  group_by(variedad) %>%
+  sample_n(100, replace=FALSE) %>%
+  mutate_at('variedad', as.factor)
+
+hierarchical_numeric_df = hierarchical_df %>% dplyr::select(where(is.numeric))
+hierarchical_numeric_df = hierarchical_numeric_df[, ! names(hierarchical_numeric_df) %in% c("variedad"), drop = F]
+
+# Escalo los datos y hago PCA
+datos.pc2 = prcomp(hierarchical_numeric_df, scale = TRUE)
+
+kable(table(hierarchical_df$variedad))
+```
+
+### Matriz de distancias Euclidea
+```{r}
+# Matriz de distancias euclídeas 
+euc_dist_mat <- dist(x = hierarchical_numeric_df, method = "euclidean") 
+
+# Dendrogramas (según el tipo de segmentación jerárquica aplicada)  
+hc_euc_complete <- hclust(d = euc_dist_mat, method = "complete") 
+hc_euc_average  <- hclust(d = euc_dist_mat, method = "average")
+hc_euc_single   <- hclust(d = euc_dist_mat, method = "single")
+hc_euc_ward     <- hclust(d = euc_dist_mat, method = "ward.D2")
+
+# calculo del coeficiente de correlacion cofenetico
+euc_completo <- round(cor(x = euc_dist_mat, cophenetic(hc_euc_complete)),3)
+euc_promedio <- round(cor(x = euc_dist_mat, cophenetic(hc_euc_average)),3)
+euc_simple <- round(cor(x = euc_dist_mat, cophenetic(hc_euc_single)),3)
+euc_ward <- round(cor(x = euc_dist_mat, cophenetic(hc_euc_ward)),3)
+euc_valores_coef <- cbind(euc_completo, euc_promedio, euc_simple, euc_ward)
+
+# Imprimo valores de coeficiente cofenético
+kable(euc_valores_coef)
+```
+
+### Matriz de distancias Manhattan
+```{r}
+# Matriz de distancias euclídeas 
+man_dist_mat <- dist(x = hierarchical_numeric_df, method = "manhattan") 
+
+# Dendrogramas (según el tipo de segmentación jerárquica aplicada)  
+hc_man_complete <- hclust(d = man_dist_mat, method = "complete") 
+hc_man_average  <- hclust(d = man_dist_mat, method = "average")
+hc_man_single   <- hclust(d = man_dist_mat, method = "single")
+hc_man_ward     <- hclust(d = man_dist_mat, method = "ward.D2")
+
+# calculo del coeficiente de correlacion cofenetico
+man_completo <- round(cor(x = man_dist_mat, cophenetic(hc_man_complete)),3)
+man_promedio <- round(cor(x = man_dist_mat, cophenetic(hc_man_average)),3)
+man_simple <- round(cor(x = man_dist_mat, cophenetic(hc_man_single)),3)
+man_ward <- round(cor(x = man_dist_mat, cophenetic(hc_man_ward)),3)
+man_valores_coef <- cbind(man_completo, man_promedio, man_simple, man_ward)
+
+# Imprimo valores de coeficiente cofenético
+kable(man_valores_coef)
+```
+
+Observando los resultados de los coeficientes cofenéticos de las distancias euclidias y manhattan, vemos que el mayor valor está dado por la **distancia euclidia** para el **método promedio**, por lo que utilizaremos estos valores para realizar el dendograma, junto a un K = 2 que es la cantidad de categorías en la variable target *variedad*
+
+```{r}
+cantidad_clusters = 2
+jer_average <- cutree(hc_euc_average, k = cantidad_clusters)
+
+# Agrego cluster a dataframe
+hierarchical_df$jer_average = jer_average
+kable(table(hierarchical_df$jer_average))
+```
+### Dendrograma jerárquico
+
+```{r}
+pch=c('royalblue2','#ff7474ff') 
+cols_a=alpha(pch[hierarchical_df$variedad[order.dendrogram(as.dendrogram(hc_euc_average))]],0.7)
+dend_average <- color_branches(as.dendrogram(hc_euc_average), k = 2)
+dend_average <- set(dend_average, "labels_cex", 0.1)
+grafico2 <- dend_average %>% set("leaves_pch",19) %>%  
+        set("leaves_cex", .8) %>%  set("leaves_col", cols_a) %>% 
+        plot(main = "Dendrograma jerárquico",  ylab='Distancia',cex.lab=1, cex.axis=.6)+
+        mtext(side = 3, line = 0, at = 75, adj = 0, 'Distancia Promedio')+
+        mtext(side = 1, line = 0, at = 120, adj = 1, 'Individuos')
+legend(180,100, title='Variedad', 
+     legend = c("tinto" , "blanco"), 
+     col = c('royalblue2','#ff7474ff') , 
+     pch = c(19,19), bty = "n",  pt.cex = 1.5, cex = 0.8 , 
+     text.col = "black", horiz = FALSE, inset = c(0, 0.1))
+```
+
+```{r prom2}
+# ·····················································
+promedio_cluster1 <- hierarchical_df %>% filter (jer_average == '1')
+cluster1 <- table(promedio_cluster1$variedad)
+promedio_cluster.1 <- round(prop.table(cluster1)*100,2)
+# ·····················································
+promedio_cluster2 <- hierarchical_df %>% filter (jer_average == '2')
+cluster2 <- table(promedio_cluster2$variedad)
+promedio_cluster.2 <- round(prop.table(cluster2)*100,2)
+
+kable(cbind(rbind(cluster1,cluster2),rbind(promedio_cluster.1,promedio_cluster.2)))
+```
+### Conclusiones
+
+Para aplicar el método jerárquico y poder visualizar los resultados se tuvo que reducir la muestra original de 2000 individuos a 200, ya que al utilizar más individuos el tiempo y costo computacional se eleva considerablemente, al tener que evaluar todos los individuos realizando un producto cartesiano y mantener en memoria todas esas distancias. Además de eso, la visualización en el dendograma se torma muy complicada de entender por la cantidad de individuos interactuando y generando relaciones de distancia.
+
+De los resultados obtenidos, para este subconjunto, se determinó que la mejor distancia es la euclídia, aplicando el método promedio, lo cual generó un dendograma balanceado. 
+
+En cuanto a la clasificación, se obtuvo un mejor resultado en la variedad 1, de un 97%, en cambio en la variedad 2, este porcentaje se redujo a tan solo 82%. Puede ser que en la reducción del dataset se haya elegido algún valor atípico o que se enmascaraba en el conjunto mayor, sin embargo, los resultados son muy buenos.
+
+## 5- K-means
+Aplique a los datos el método de clasificación no jerárquico K-means. Interprete los
+resultados.
+
+### Elección del número de clusters
+
+En este caso sabemos que la cantidad de grupos que necesitamos son 2, de acuerdo a las variedades de vino, pero haciedo otro tipo de análisis se podrían llegar a encontrar clusters que representen otro tipo de relación, podrían ser sub-variedades dentro de cada categoría, malbec, syrak, torrontes, etc. 
+
+Haremos el análisis para determinar la cantidad de grupos, pero luego se realizará el tratamiento con un k = 2.
+
+```{r}
+datos_para_cluster = numeric_df
+#analisis de la cantidad de clusters. Este primer bloque es solo para definir funciones.
+#se define una funcion para calcular metricas que orientan sobre el numero de clusters a elegir para el problema.
+metrica_kmeans = function(datA_esc, kmax) {
+  sil = array()
+  sse = array()
+  datA_dist= dist(datA_esc, method = "euclidean", diag = FALSE, upper = FALSE, p = 2)
+  
+  for (i in 2:kmax) { 
+    CL  = kmeans(datA_esc,centers=i,nstart=50,iter.max = kmax)
+    sse[i]  = CL$tot.withinss 
+    CL_sil = cluster::silhouette(CL$cluster, datA_dist)
+    sil[i]  = summary(CL_sil)$avg.width
+  }
+  
+  return(data.frame(sse,sil))
+}
+
+#en este bloque se estudia cuantos clusters convendría generar segun indicadores tipicos -> por ejemplo el "Silhouette"
+kmax = 10
+
+m1   = metrica_kmeans(scale(datos_para_cluster), kmax)  #tipica con estimadores de la normal
+m1 <- m1[complete.cases(m1),]
+m1$kcluster <- seq(2,kmax,1)
+m1 <- m1%>%dplyr::select(3,1,2)
+m1_sse <- m1%>%dplyr::select(-3)%>%mutate(metric='SSE')
+colnames(m1_sse) <- c('kcluster','value','metric')
+m1_sil <- m1%>%dplyr::select(-2)%>%mutate(metric='SIL')
+colnames(m1_sil) <- c('kcluster','value','metric')
+m1 <- rbind(m1_sse,m1_sil)
+# Grafico de métricas SIL y SSE
+ggplot(m1, aes(kcluster, value, linetype=metric)) + geom_line(col='red') + 
+        facet_wrap(~metric, ncol=1, scales='free')+theme+geom_point(col='red', size=2, fill='pink', shape=21)+
+        labs(title='Determinación de número de clusters', 
+             x='k Número de clusters', y='Valor', linetype='Métrica')+
+        scale_x_continuous(breaks = seq(1, kmax, by = 1))+
+        scale_linetype_manual(values=c(1,2))
+```
+
+Según podemos apreciar, 4 o 5 sería el número indicado para identificar los agrupamientos que se dan dantro del dataset de entrenamiento. Sin embargo, por la naturaleza del problema utilizaremos un k = 2 para clasificar a los individuos en variedad tinto o blanco.
+
+### Evolución según número de clusters
+
+A continuación se presentan los resultados de aplicar k-means con K entre 2 y 5, que son los valores que detectamos pueden obtener valores significativos.
+
+Observando los gráficos vemos que el mejor agrupamiento es K = 2 donde hay un menor solapamiento en los subconjuntos generados. A partir de K = 3 vemos que los subconjuntos se solapan mucho, principalmente del lado positivo de la PC1. Posiblemente se puedan descubrir subconjuntos de poblaciones, pero la cantidad de errores tipo 1 y 2 crecerá considerablemente.
+
+```{r} 
+set.seed(907)
+
+cantidad_clusters = 2
+CL = kmeans(scale(datos_para_cluster), cantidad_clusters)
+stratified_df$kmeans_2 = as.factor(CL$cluster)
+
+cantidad_clusters = 3
+CL = kmeans(scale(datos_para_cluster), cantidad_clusters)
+stratified_df$kmeans_3 = as.factor(CL$cluster)
+
+cantidad_clusters = 4
+CL = kmeans(scale(datos_para_cluster), cantidad_clusters)
+stratified_df$kmeans_4 = as.factor(CL$cluster)
+
+cantidad_clusters = 5
+CL = kmeans(scale(datos_para_cluster), cantidad_clusters)
+stratified_df$kmeans_5 = as.factor(CL$cluster)
+
+original_plot = autoplot(pca,
+         data = stratified_df,
+         colour = 'variedad',
+         loadings = TRUE,
+         loadings.colour = 'black',
+         loadings.label = TRUE,
+         loadings.label.size = 4,
+         loadings.label.color = 'black') +
+  stat_ellipse(geom = "polygon",
+               aes(color = variedad,
+               linetype = variedad,
+               fill = variedad,
+               title = "Original"), 
+               alpha = 0.25) + 
+  ggtitle("Original")
+
+k_2_plot = autoplot(pca,
+         data = stratified_df,
+         colour = 'kmeans_2',
+         loadings = TRUE,
+         loadings.colour = 'black',
+         loadings.label = TRUE,
+         loadings.label.size = 4,
+         loadings.label.color = 'black') +
+  stat_ellipse(geom = "polygon",
+               aes(color = kmeans_2,
+               linetype = kmeans_2,
+               fill = kmeans_2), 
+               alpha = 0.25) + 
+  ggtitle("K = 2")
+
+k_3_plot = autoplot(pca,
+         data = stratified_df,
+         colour = 'kmeans_3',
+         loadings = TRUE,
+         loadings.colour = 'black',
+         loadings.label = TRUE,
+         loadings.label.size = 4,
+         loadings.label.color = 'black') +
+  stat_ellipse(geom = "polygon",
+               aes(color = kmeans_3,
+               linetype = kmeans_3,
+               fill = kmeans_3), 
+               alpha = 0.25) + 
+  ggtitle("K = 3")
+
+k_4_plot = autoplot(pca,
+         data = stratified_df,
+         colour = 'kmeans_4',
+         loadings = TRUE,
+         loadings.colour = 'black',
+         loadings.label = TRUE,
+         loadings.label.size = 4,
+         loadings.label.color = 'black') + 
+  stat_ellipse(geom = "polygon",
+               aes(color = kmeans_4,
+               linetype = kmeans_4,
+               fill = kmeans_4,
+               title = "K=4"), 
+               alpha = 0.25) + 
+  ggtitle("K = 4")
+
+k_5_plot = autoplot(pca, 
+         data = stratified_df, 
+         colour = 'kmeans_5',
+         loadings = TRUE, 
+         loadings.colour = 'black',
+         loadings.label = TRUE, 
+         loadings.label.size = 4,
+         loadings.label.color = 'black') + 
+  stat_ellipse(geom = "polygon",
+               aes(color = kmeans_5,
+               linetype = kmeans_5,
+               fill = kmeans_5), 
+               alpha = 0.25) + 
+  ggtitle("K = 5")
+
+original_plot
+k_2_plot
+k_3_plot
+k_4_plot
+k_5_plot
+```
+
+### Comparación de resultados contra el dataset original
+
+De los gráficos anteriores y del análisis de la clasificación realizada por k-means con K = 2, vemos que el porcentaje de aciertos es superior al 98% en ambas variedades, lo cual lo posiciona por debajo de LDA y SVM, pero son valores muy altos.
+
+Al ver los gráficos vemos que hay varios puntos fuera de las elipses de los grupos, lo cual nos permite entender que el modelo que estamos construyendo en este caso está afectados por estos valores atípicos que estan separados del centro de cada grupo y que hacen que la dispersión afecte la generación de los grupos según el origen inicial que haya determinado k-means como centros iniciales.
+
+Comparandolo con SVM el tiempo de calculo y renderizado de los resultados es menor.
+
+```{r}
+# cuántos pacientes de cada diagnóstico están en cada cluster:
+vinos_cluster1 <- stratified_df %>% filter (kmeans_2 == '1')
+cluster1 <- table(vinos_cluster1$variedad)
+porcentaje_cluster_1 <- round(prop.table(cluster1)*100,2)
+
+vinos_cluster2 <- stratified_df %>% filter (kmeans_2 == '2')
+cluster2 <- table(vinos_cluster2$variedad)
+porcentaje_cluster_2 <- round(prop.table(cluster2)*100,2)
+# ·····················································
+# Imprimo resultados
+kable(cbind(rbind(cluster1, cluster2), rbind(porcentaje_cluster_1, porcentaje_cluster_2)))
+```
+
+
+## 6- Conclusiones finales
+
+Me gustaría dividir las conclusiones en 3 partes. Primero hacer referencia al análisis de componentes principales, luego a la clasificación y predicción de los variedades de vinos y por último a un breve resumen personal de la experiencia al realizar el presente trabajo.
+
+Para el análisis de las componentes principales, se realizó una breve exploración de los datos, siendo que en el TP anterior se profundizó en el análisis univariado, ya se contaba con una ligera comprensión de los datos con los que se está trabajando, por lo que el enfoque estuvo dado en comprender si existe alguna correlación entre las variables y comprender la varianza que existe, para luego poder analizar los resultados obtenidos por el método de componentes principales. Una vez aplicado el método y luego de evaluar los criterios, se decidió que utilizar 4 componentes permite reducir la dimensionalidad del problema y mantener un varianza explicada suficiente para analizar y visualizar los procedimientos que se quiera aplicar, como sucedió con el caso de K-means, donde se pudo evidenciar el agrupamiento en las dimensiones reducidas, que hubise sido imposible de evaluar con las 12 variables que componen el dataset.
+
+Con los loadings y scores obtenidos intenté darle nombre a las componentes principales, pero al no tener contexto sobre el dominio del problema no logré encontrarles significado, pero si se logra ver cuales son las variables que más influyen en cada PC y surgen algunas ideas que sería necesario validarlas con algún experto. Por ejemplo, en la PC1 se observan como principales contribuidores a la acidez, los anhídrido.sulfurosos y azúcar, por lo que se podría pensar que esta componente habla de las tonalidades o sabores que tiene cada vino, donde la acidez está en correspondencia a los vinos tintos y la dulzura a los vinos blancos.
+
+
+En relación al resto del TP que está vinculado a los métodos de clasificación, lo primero con lo que me topé fue con el incumplimiento de los supuestos para poder tener confianza en los resultados obtenidos, pero en la práctica se observó que la clasificación se realizó con un grado de accuracy mayor al 95%, lo cual es un valor muy alto considerando que no se cumple con los supuestos, lo cual me lleva a pensar que puede ser la cantidad de datos lo que permita que los resultados sean buenos o que las muestras tomadas ya han sido tratadas o mejoradas de alguna forma para contribuir a los experimentos. Sea el caso se sea, se pudieron ejecutar todos los experimentos y observar y comprobar los temas teóricos vistos durante la cursada.
+
+Para el análisis discriminante y SVM se generaron dataset de entrenamiento y test con una proporción de 90/10 y como se comentó previamente, no se pudieron validar los supuestos de Normalidad y Homocedasticidad, pero si se pudo verificar que las medias de los conjuntos no sean iguales, lo que impediría realizar cualquier método de clasificación al no poder separar en grupos a los individuos. En cuanto a LDA y QDA, se observó que el accuracy de QDA es menor, lo cual puede ser por la presencia de outliers, donde QDA es más sensible o puede ser que la falta de normalidad esté afectando en mayor medida a QDA que a LDA. Algo que no se realizó por falta de tiempo, fue un análisis detallada de este supuesto de outliers o datos atípicos para determinar si efectivamente esa es la causa, pero se deja planteada la hipotesis para un trabajo futuro.
+
+En el análisis de SVM se observó una tasa de aciertos casi perfecta. Lo cual es sospechoso, pero no logré encontrar algún indicio de distorsión en los datos o problema en la ejecución que esté generando alguna omisión en validaciones u overfitting, por lo que se asume que los datos son correctos y se presentaron los resultados obtenidos.
+
+Para aplicar el método jerárquico y poder visualizar los resultados se tuvo que reducir la muestra original a un 10%, ya que al utilizar una gran cantidad de individuos el tiempo y costo computacional se eleva considerablemente, además de complicar la lectura del dendograma. Se determinó que, para este dataset, la mejor distancia para aplicar en el experimento es la distancia euclídia, aplicada en conjunto con el método de distancia promedio entre los individuos. En cuanto a la clasificación, se obtuvo un mejor resultado en la variedad 1, de un 97%, en cambio en la variedad 2, este porcentaje se redujo a tan solo 82%. Puede ser que en la reducción del dataset se haya elegido algún valor atípico o que se enmascaraba en el conjunto mayor, sin embargo, los resultados son muy buenos.
+
+Por último, se realizó el análsis con k-means, para lo cual en primer instancia se analizó la cantidad de cluster "óptimo" y se aplicó el método con 2, 3, 4 y 5 clusters y se graficaron los resultados sobre las PC1 y PC2 para comparar la clasificación son los datos originales. Se observó que para k = 2, la clasificación es casi igual a los valores originales, lo cual era esperable, pero al utilizar una mayor cantidad de grupos, estos se empiezan a solapar y si bien, los nuevos grupos ya no representan a las variedades originales (tinto y blanco), sino que están representando otro tipo de variedad que no conocemos pero que son un subconjunto de estos, ya que los nuevos grupos están subscriptos al dominio original, no se observa que uno de estos grupos comparta individuos de las categoria originales. También se detectó al ver los gráficos que hay varios puntos fuera de las elipses de los grupos, lo cual nos permite entender que el modelo que estamos construyendo está siendo afectados por estos valores atípicos que estan separados del centro de cada grupo y que hacen que la dispersión afecte la generación de los grupos según el origen inicial que haya determinado k-means como centros iniciales.
+
+
+En cuanto al resumen personal que realizo del TP, me llevo los siguientes temas. Al utilizar datos reales, como los que asumimos para este trabajo, es normal que no se cumplan los supuestos y se termine utilizando los métodos igualmente con cierto grado de desconfianza, ya que clasifican correctamente, pero no cuentan con el sustento formal que brindan los supuestos de normalidad y homocedasticidad. Esto en general se termina solucionando con la aplicación de algún método robusto o no paramétrico. Agradezco mucho la ayuda brindada por los ejemplos vistos en clase y la posibilidad de poder ejecutar rápidamente cada uno de los métodos y poder realizar el análisis de los resultados, ya que me encontré con varios problemas durante la ejecución y poder contar con esos ejemplos de base me permitieron encontrar la solución o los paquetes y documentación que consultar. Un problema con el que me topé y no pude solucionar, fue graficar los resultados de las predicciones de SVM junto a las componentes principales, por un problema de compatibilidad con la función ggbiplot y data de tipo prcomp, lo cual pude mitigar en k-means con autoplot.
+
+

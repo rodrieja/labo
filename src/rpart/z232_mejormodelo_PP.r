@@ -9,7 +9,7 @@ require("data.table")
 require("rpart")
 require("parallel")
 
-ksemillas  <- c( 102191, 200177, 410551, 552581, 892237 ) #reemplazar por las propias semillas
+ksemillas  <- c(481721, 483757, 503609, 519427, 539573) #reemplazar por las propias semillas
 
 #------------------------------------------------------------------------------
 #particionar agrega una columna llamada fold a un dataset que consiste en una particion estratificada segun agrupa
@@ -89,7 +89,7 @@ ArbolesMontecarlo  <- function( semillas,  param_basicos )
 #------------------------------------------------------------------------------
 
 #Aqui se debe poner la carpeta de la computadora local
-setwd("D:\\gdrive\\UBA2022\\")   #Establezco el Working Directory
+setwd("/Users/alejandrrodr/Documents/DMUBA/DM-EyF") #Establezco el Working Directory
 #cargo los datos
 
 #cargo los datos
