@@ -12,12 +12,26 @@ setwd("/Users/alejandrrodr/Documents/DMUBA/DM-EyF") # Establezco el Working Dire
 # cargo el dataset
 dataset <- fread("./datasets/competencia2_2022.csv.gz")
 
-dataset[foto_mes]
+dataset[,.N,by=.(foto_mes,clase_ternaria)]
+
+marzoMayo = dataset[foto_mes%in%c(202103, 202105),]
+marzoMayo
 
 # dataset[, clase_binaria := ifelse(clase_ternaria == "CONTINUA", "NEG", "POS")]
-dataset[, clase_mes := ifelse(foto_mes == 202101, "ENERO", "MARZO")]
+marzoMayo[, clase_mes := ifelse(foto_mes == 202103, "MARZO", "MAYO")]
+marzoMayo
 
-dtrain <- dataset[foto_mes == 202101] # defino donde voy a entrenar
+marzoMayo[  , .N,  list( foto_mes,  Visa_fultimo_cierre ) ]
+marzoMayo[  , .N,  list( foto_mes,  Master_fultimo_cierre ) ]
+
+
+eneroMarzo = dataset[foto_mes%in%c(202103, 202101),]
+eneroMarzo[, clase_mes := ifelse(foto_mes == 202103, "MARZO", "ENERO")]
+eneroMarzo
+
+
+dtrain <- marzoMayo # defino donde voy a entrenar
+# dtrain <- eneroMarzo # defino donde voy a entrenar
 dapply <- dataset[foto_mes == 202103] # defino donde voy a aplicar el modelo
 
 # genero el modelo,  aqui se construye el arbol
@@ -31,6 +45,7 @@ modelo <- rpart(
         maxdepth = 10
 ) # profundidad maxima del arbol
 
+modelo$variable.importance
 
 # grafico el arbol
 prp(modelo, extra = 101, digits = 5, branch = 1, type = 4, varlen = 0, faclen = 0)
