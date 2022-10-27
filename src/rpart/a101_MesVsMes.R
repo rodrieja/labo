@@ -23,6 +23,7 @@ marzoMayo
 
 marzoMayo[  , .N,  list( foto_mes,  Visa_fultimo_cierre ) ]
 marzoMayo[  , .N,  list( foto_mes,  Master_fultimo_cierre ) ]
+marzoMayo[  , .N,  list( foto_mes,  ctarjeta_visa ) ]
 
 
 eneroMarzo = dataset[foto_mes%in%c(202103, 202101),]
