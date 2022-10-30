@@ -19,7 +19,7 @@ require("lightgbm")
 
 # Parametros del script
 PARAM <- list()
-PARAM$experimento <- "FE9281"
+PARAM$experimento <- "FE9282"
 
 PARAM$exp_input <- "DR9142"
 
@@ -328,7 +328,7 @@ setwd("~/buckets/b1/")
 
 # cargo el dataset donde voy a entrenar
 # esta en la carpeta del exp_input y siempre se llama  dataset.csv.gz
-dataset_input <- paste0("./exp/", PARAM$exp_input, "/dataset_nn_cerofijo.csv.gz")
+dataset_input <- paste0("./exp/", PARAM$exp_input, "/dataset.csv.gz")
 dataset <- fread(dataset_input)
 
 
@@ -386,7 +386,7 @@ setorder(dataset, numero_de_cliente, foto_mes)
 if (PARAM$Tendencias) {
   TendenciaYmuchomas(dataset,
                      cols = cols_lagueables,
-                     ventana = 6, # 6 meses de historia
+                     ventana = 9, # 9 meses de historia
                      tendencia = TRUE,
                      minimo = FALSE,
                      maximo = FALSE,
