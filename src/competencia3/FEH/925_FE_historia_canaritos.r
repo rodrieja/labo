@@ -19,7 +19,7 @@ require("lightgbm")
 
 # Parametros del script
 PARAM <- list()
-PARAM$experimento <- "FE9280"
+PARAM$experimento <- "FE9281"
 
 PARAM$exp_input <- "DR9142"
 
@@ -279,7 +279,7 @@ CanaritosAsesinos <- function(canaritos_ratio = 0.2) {
     boost_from_average = TRUE,
     feature_pre_filter = FALSE,
     verbosity = -100,
-    seed = 999983,
+    seed = 539573,
     max_depth = -1, # -1 significa no limitar,  por ahora lo dejo fijo
     min_gain_to_split = 0.0, # por ahora, lo dejo fijo
     lambda_l1 = 0.0, # por ahora, lo dejo fijo
@@ -416,14 +416,14 @@ if (PARAM$RandomForest) {
 
 if (PARAM$CanaritosAsesinos) {
   ncol(dataset)
-  CanaritosAsesinos(canaritos_ratio = 0.3)
+  CanaritosAsesinos(canaritos_ratio = 0.35)
   ncol(dataset)
 }
 
 #------------------------------------------------------------------------------
 # grabo el dataset
 fwrite(dataset,
-       "dataset_cero_fijo_canaritos.csv.gz",
+       "dataset_canaritos.csv.gz",
        logical01 = TRUE,
        sep = ","
 )
