@@ -60,7 +60,7 @@ param_lgb_basicos <- list(
   neg_bagging_fraction = 1.0, # por ahora, lo dejo fijo
   
   drop_rate = 0.2, # solo se activa en  dart
-  max_drop = -1, # solo se activa en  dart
+  max_drop = 50, # solo se activa en  dart
   skip_drop = 0.5, # solo se activa en  dart
   
   extra_trees = FALSE,

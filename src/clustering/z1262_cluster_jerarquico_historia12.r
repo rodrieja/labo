@@ -95,10 +95,10 @@ while(  h>0  &  !( distintos >=6 & distintos <=7 ) )
 {
   h <- h - 1 
   rf.cluster  <- cutree( hclust.rf, h)
-
+  
   dataset[  , cluster2 := NULL ]
   dataset[  , cluster2 := rf.cluster ]
-
+  
   distintos  <- nrow( dataset[  , .N,  cluster2 ] )
   cat( distintos, " " )
 }
