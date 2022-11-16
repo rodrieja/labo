@@ -21,7 +21,7 @@ semillas <- c(481721, 483757, 503609, 519427, 539573)
 
 
 # Cargamos el dataset
-dataset <- fread("./datasets/competencia3_2022.csv.gz")
+dataset <- fread("./datasets/competenciaFINAL_2022.csv.gz")
 
 #### Analisis descriptivo de fechas
 
