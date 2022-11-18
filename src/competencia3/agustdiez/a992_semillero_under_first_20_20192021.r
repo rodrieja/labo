@@ -116,7 +116,7 @@ for( i in  1:PARAM$modelos )
   
   sample_semillas[40:50]
   
-  for (ksemilla in sample_semillas[40:50]) {
+  for (ksemilla in sample_semillas[1:40]) {
     #Utilizo la semilla obtenida del semillerio
     parametros$seed  <- ksemilla
     
