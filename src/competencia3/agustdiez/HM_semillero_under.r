@@ -31,7 +31,7 @@ base_dir <- "~/buckets/b1/"
 dataset_prediccion <- data.table()
 lista_pred <- c()
 
-for( modelo in  1:PARAM$modelos )
+for( modelo in  PARAM$modelos )
 {
   nom_prob  <- paste0( base_dir, 
                         "exp/", 
@@ -40,7 +40,8 @@ for( modelo in  1:PARAM$modelos )
                         )
   
   tb_prediccion <- fread( file=nom_prob, sep="," )
-  
+  setorder( tb_prediccion, numero_de_cliente )
+
   if (nrow(dataset_prediccion) == 0) {
     dataset_prediccion <- data.table(numero_de_cliente=tb_prediccion$numero_de_cliente, 
                                       foto_mes=tb_prediccion$foto_mes)
